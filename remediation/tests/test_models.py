@@ -1,5 +1,5 @@
 """
-Unit tests for remediation data models.
+Unit tests for remediation data models and validation.
 
 These tests verify that the models correctly serialize/deserialize
 and validate data from the Investigator module.
@@ -16,6 +16,177 @@ from remediation.models import (
     IssueType,
     ChangeType,
 )
+
+
+class TestInputValidation:
+    """Tests for input validation in the remediation module."""
+
+    def test_validate_empty_findings_rejected(self):
+        """Test that empty findings list is rejected."""
+        from remediation.app import validate_request
+
+        request = RemediationRequest(findings=[])
+
+        with pytest.raises(Exception) as exc_info:
+            validate_request(request)
+
+        assert "at least one finding" in str(exc_info.value).lower()
+
+    def test_validate_too_many_findings_rejected(self):
+        """Test that more than 100 findings is rejected."""
+        from remediation.app import validate_request
+
+        findings = [
+            AccessibilityFinding(
+                finding_id=f"f{i}",
+                issue_type=IssueType.BUTTON_NAME_MISSING,
+                element=f"button{i}",
+                html=f"<button>Btn{i}</button>",
+                root_cause="No name",
+            )
+            for i in range(101)
+        ]
+
+        request = RemediationRequest(findings=findings)
+
+        with pytest.raises(Exception) as exc_info:
+            validate_request(request)
+
+        assert "100" in str(exc_info.value)
+
+    def test_validate_path_traversal_rejected(self):
+        """Test that path traversal in file_path is rejected."""
+        from remediation.app import validate_finding, validate_request
+
+        finding = AccessibilityFinding(
+            finding_id="test-001",
+            issue_type=IssueType.BUTTON_NAME_MISSING,
+            element="button",
+            html="<button>Submit</button>",
+            root_cause="No name",
+            file_path="../../../etc/passwd",  # Path traversal attempt
+        )
+
+        request = RemediationRequest(findings=[finding])
+
+        with pytest.raises(Exception) as exc_info:
+            validate_request(request)
+
+        assert "path traversal" in str(exc_info.value).lower()
+
+    def test_validate_path_traversal_in_repo_path_rejected(self):
+        """Test that path traversal in repo_path is rejected."""
+        from remediation.app import validate_request
+
+        findings = [
+            AccessibilityFinding(
+                finding_id="test-002",
+                issue_type=IssueType.BUTTON_NAME_MISSING,
+                element="button",
+                html="<button>Submit</button>",
+                root_cause="No name",
+            )
+        ]
+
+        request = RemediationRequest(
+            findings=findings,
+            repo_path="/home/user/../../etc/passwd"
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            validate_request(request)
+
+        assert "path traversal" in str(exc_info.value).lower()
+
+    def test_validate_invalid_line_number_rejected(self):
+        """Test that invalid (negative) line numbers are rejected."""
+        from remediation.app import validate_finding
+
+        finding = AccessibilityFinding(
+            finding_id="test-003",
+            issue_type=IssueType.BUTTON_NAME_MISSING,
+            element="button",
+            html="<button>Submit</button>",
+            root_cause="No name",
+            line_number=-1,  # Invalid
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            validate_finding(finding, 0)
+
+        assert "line" in str(exc_info.value).lower()
+
+    def test_validate_invalid_branch_name_rejected(self):
+        """Test that invalid branch names are rejected."""
+        from remediation.app import validate_request
+
+        findings = [
+            AccessibilityFinding(
+                finding_id="test-004",
+                issue_type=IssueType.BUTTON_NAME_MISSING,
+                element="button",
+                html="<button>Submit</button>",
+                root_cause="No name",
+            )
+        ]
+
+        request = RemediationRequest(
+            findings=findings,
+            target_branch="fix;rm -rf /"  # Dangerous branch name
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            validate_request(request)
+
+        # Should fail because of semicolon
+        assert "alphanumeric" in str(exc_info.value).lower() or "branch" in str(exc_info.value).lower()
+
+    def test_validate_valid_input_passes(self):
+        """Test that valid input passes validation."""
+        from remediation.app import validate_request
+
+        findings = [
+            AccessibilityFinding(
+                finding_id="test-005",
+                issue_type=IssueType.BUTTON_NAME_MISSING,
+                element="#submit-btn",
+                html='<button id="submit-btn">Submit</button>',
+                root_cause="No accessible name",
+                file_path="/project/src/index.html",
+                line_number=42,
+            ),
+            AccessibilityFinding(
+                finding_id="test-006",
+                issue_type=IssueType.INPUT_LABEL_MISSING,
+                element="#email",
+                html='<input type="email" id="email">',
+                root_cause="No label",
+            ),
+        ]
+
+        request = RemediationRequest(
+            findings=findings,
+            repo_path="/my-project",
+            target_branch="fix-accessibility-issue",
+        )
+
+        # Should not raise any exception
+        validate_request(request)
+
+    def test_validate_finding_id_length(self):
+        """Test finding_id length validation."""
+        from remediation.app import validate_finding
+
+        finding = AccessibilityFinding(
+            finding_id="x" * 101,  # Too long
+            issue_type=IssueType.BUTTON_NAME_MISSING,
+            element="button",
+            html="<button>Submit</button>",
+            root_cause="No name",
+        )
+
+        with pytest.raises(Exception):
+            validate_finding(finding, 0)
 
 
 class TestAccessibilityFinding:
