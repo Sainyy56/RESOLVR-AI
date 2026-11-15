@@ -19,6 +19,15 @@ from remediation.models import (
     RemediationResponse,
     IssueType,
     ChangeType,
+    CodeChange,
+)
+from remediation.button_fixer import (
+    generate_button_fix as _generate_button_fix_impl,
+    generate_unified_diff as _button_unified_diff,
+)
+from remediation.input_fixer import (
+    generate_input_fix as _generate_input_fix_impl,
+    generate_unified_diff as _input_unified_diff,
 )
 
 # Configure logging
@@ -258,8 +267,6 @@ def generate_fix_for_finding(finding: AccessibilityFinding):
     This is a simple implementation for Milestone 1.
     In later milestones, this will be expanded to handle more issue types.
     """
-    from remediation.models import CodeChange, ChangeType
-
     # Simple fix generation logic based on issue type
     if finding.issue_type.value == "button-name-missing":
         return _generate_button_name_fix(finding)
@@ -271,33 +278,58 @@ def generate_fix_for_finding(finding: AccessibilityFinding):
 
 
 def _generate_button_name_fix(finding: AccessibilityFinding) -> CodeChange:
-    """Generate a fix for missing button accessible name."""
+    """Generate a fix for missing button accessible name.
+
+    Uses the button_fixer module to intelligently generate aria-label
+    based on button context (type, id, class, parent form, etc.).
+    """
     html = finding.html
 
-    # Simple heuristic: if button has text but no aria-label/name,
-    # we might need to add context or verify the text is sufficient
+    # Use the button fixer module to generate an intelligent fix
+    fix = _generate_button_fix_impl(html)
+
+    # Generate unified diff for the change
+    diff = _button_unified_diff(
+        fix.original_html,
+        fix.fixed_html,
+        file_path=finding.file_path or "index.html"
+    )
 
     return CodeChange(
         finding_id=finding.finding_id,
         file_path=finding.file_path or "unknown",
-        original_code=html,
-        modified_code=html,  # To be updated in later milestones
-        diff=f"@@ -1 +1 @@\n-{html}\n+{html}",  # Placeholder
+        original_code=fix.original_html,
+        modified_code=fix.fixed_html,
+        diff=diff.rstrip('\n'),  # Remove trailing newline if present
         change_type=ChangeType.ADD_ARIA_LABEL,
-        explanation="Button needs an accessible name for screen readers",
+        explanation=fix.explanation,
     )
 
 
 def _generate_input_label_fix(finding: AccessibilityFinding) -> CodeChange:
-    """Generate a fix for missing input label."""
+    """Generate a fix for missing input label.
+
+    Uses the input_fixer module to intelligently generate aria-label
+    based on input context (type, id, placeholder, etc.).
+    """
     html = finding.html
+
+    # Use the input fixer module to generate an intelligent fix
+    fix = _generate_input_fix_impl(html)
+
+    # Generate unified diff for the change
+    diff = _input_unified_diff(
+        fix.original_html,
+        fix.fixed_html,
+        file_path=finding.file_path or "index.html"
+    )
 
     return CodeChange(
         finding_id=finding.finding_id,
         file_path=finding.file_path or "unknown",
-        original_code=html,
-        modified_code=html,  # To be updated in later milestones
-        diff=f"@@ -1 +1 @@\n-{html}\n+{html}",  # Placeholder
-        change_type=ChangeType.WRAP_WITH_LABEL,
-        explanation="Input needs a label for screen readers",
+        original_code=fix.original_html,
+        modified_code=fix.fixed_html,
+        diff=diff.rstrip('\n'),  # Remove trailing newline if present
+        change_type=ChangeType.ADD_ARIA_LABEL,
+        explanation=fix.explanation,
     )

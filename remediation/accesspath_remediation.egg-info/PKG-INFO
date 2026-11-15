@@ -1,0 +1,104 @@
+Metadata-Version: 2.4
+Name: accesspath-remediation
+Version: 0.1.0
+Summary: Remediation and verification module for AccessPath AI
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.100.0
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: python-multipart>=0.0.7
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
+Requires-Dist: httpx>=0.24.0; extra == "dev"
+
+# Remediation Module (Milestone 2)
+
+This module handles code fix generation and verification for accessibility issues identified by the AccessPath AI platform.
+
+## Purpose
+
+The remediation module receives structured accessibility findings from the AI Investigator, validates the input, generates appropriate code fixes, and manages the human approval workflow.
+
+## Current Status
+
+**Milestone 2 Complete**: Input validation is implemented and tested.
+
+## Responsibilities
+
+1. **Fix Generation**: Create minimal, appropriate code fixes for accessibility issues
+2. **Input Validation**: Validate incoming findings for security and correctness
+3. **Diff Generation**: Produce readable code diffs for developer review
+4. **Patch Application**: Apply approved fixes in an isolated environment (worktree)
+5. **Verification**: Run builds/tests/rescans to confirm fixes work
+
+## Data Flow
+
+```
+Investigator → [AccessibilityFinding] → Validation → Remediation Module → [CodeChange] → Developer Approval → Apply → Verify
+```
+
+## API Endpoints
+
+- `POST /remediate` - Generate code fixes for accessibility findings (with validation)
+
+## Validation Features
+
+The module implements comprehensive input validation:
+
+- **Empty request rejection**: At least one finding required
+- **Maximum findings limit**: 100 findings per request
+- **Path traversal prevention**: File paths checked for `..` sequences
+- **Safe branch names**: Target branch names validated (alphanumeric, hyphens, underscores)
+- **Line number validation**: Must be positive integers
+- **Finding ID length**: Max 100 characters
+- **HTML safety checks**: Warnings logged for potentially dangerous patterns
+
+## Error Responses
+
+Validation errors return HTTP 400 with structured error messages:
+```json
+{
+  "error": "validation_failed",
+  "message": "At least one finding is required",
+  "field": null
+}
+```
+
+## Usage
+
+```python
+from remediation.models import AccessibilityFinding, RemediationRequest
+
+finding = AccessibilityFinding(
+    finding_id="abc-123",
+    issue_type="button-name-missing",
+    element="#submit-btn",
+    html="<button>Click me</button>",
+    root_cause="Missing accessible name",
+    context={}
+)
+
+request = RemediationRequest(findings=[finding])
+```
+
+## Testing
+
+```bash
+# Run tests
+pytest tests/ -v
+
+# Run specific test class
+pytest tests/test_models.py::TestInputValidation -v
+
+# Run with coverage
+pytest tests/ --cov=remediation --cov-report=html
+```
+
+## Files
+
+- `remediation/models.py` - Pydantic schemas for data contracts
+- `remediation/app.py` - FastAPI app with validation logic
+- `tests/test_models.py` - Tests for models and validation
+
+See `remediation/models.py` for complete schema definitions.

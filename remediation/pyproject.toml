@@ -1,4 +1,4 @@
-git remote -v[project]
+[project]
 name = "accesspath-remediation"
 version = "0.1.0"
 description = "Remediation and verification module for AccessPath AI"
