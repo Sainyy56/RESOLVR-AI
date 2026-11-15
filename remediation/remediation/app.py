@@ -5,15 +5,34 @@ Provides endpoints for generating and applying code fixes
 for accessibility issues.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pathlib import Path
 import uuid
+import logging
+import html.parser
+from typing import Optional
 
 from remediation.models import (
     AccessibilityFinding,
     RemediationRequest,
     RemediationResponse,
+    IssueType,
+    ChangeType,
+    CodeChange,
 )
+from remediation.button_fixer import (
+    generate_button_fix as _generate_button_fix_impl,
+    generate_unified_diff as _button_unified_diff,
+)
+from remediation.input_fixer import (
+    generate_input_fix as _generate_input_fix_impl,
+    generate_unified_diff as _input_unified_diff,
+)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="AccessPath AI - Remediation Service",
@@ -22,21 +41,197 @@ app = FastAPI(
 )
 
 
+class ValidationError(Exception):
+    """Custom exception for validation errors."""
+    def __init__(self, message: str, field: Optional[str] = None):
+        self.message = message
+        self.field = field
+        super().__init__(self.message)
+
+
+@app.exception_handler(ValidationError)
+async def validation_exception_handler(request: Request, exc: ValidationError):
+    """Handle validation errors with a consistent response format."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={
+            "error": "validation_failed",
+            "message": exc.message,
+            "field": exc.field,
+        }
+    )
+
+
+def validate_finding(finding: AccessibilityFinding, index: int) -> None:
+    """
+    Validate a single accessibility finding.
+
+    Raises ValidationError if validation fails.
+    """
+    # Validate finding_id
+    if not finding.finding_id or len(finding.finding_id) > 100:
+        raise ValidationError(
+            f"Finding ID must be 1-100 characters",
+            field=f"findings[{index}].finding_id"
+        )
+
+    # Validate element selector
+    if not finding.element or len(finding.element) > 500:
+        raise ValidationError(
+            "Element selector is required and must be <= 500 characters",
+            field=f"findings[{index}].element"
+        )
+
+    # Validate HTML content
+    if not finding.html or len(finding.html) > 50000:
+        raise ValidationError(
+            "HTML content is required and must be <= 50000 characters",
+            field=f"findings[{index}].html"
+        )
+
+    # Validate file_path if provided
+    if finding.file_path:
+        validate_file_path(finding.file_path, index)
+
+    # Validate line_number if provided
+    if finding.line_number is not None and finding.line_number < 1:
+        raise ValidationError(
+            "Line number must be positive",
+            field=f"findings[{index}].line_number"
+        )
+
+
+def validate_file_path(file_path: str, finding_index: int) -> None:
+    """
+    Validate that a file path is safe and reasonable.
+
+    Prevents path traversal attacks and validates format.
+    """
+    if not file_path:
+        return
+
+    # Check for path traversal attempts
+    if ".." in file_path:
+        raise ValidationError(
+            "File path cannot contain '..' (path traversal)",
+            field=f"findings[{finding_index}].file_path"
+        )
+
+    # Check for absolute paths starting with /
+    if file_path.startswith("/") and not file_path.startswith("/project/") and not file_path.startswith("/home/"):
+        # Allow absolute paths for now, but log for security
+        logger.warning(f"Unusual absolute path in finding: {file_path}")
+
+    # Validate path format
+    try:
+        Path(file_path)  # This will raise if invalid format
+    except Exception as e:
+        raise ValidationError(
+            f"Invalid file path format: {str(e)}",
+            field=f"findings[{finding_index}].file_path"
+        )
+
+    # Check path length
+    if len(file_path) > 1000:
+        raise ValidationError(
+            "File path must be <= 1000 characters",
+            field=f"findings[{finding_index}].file_path"
+        )
+
+
+def validate_html_safety(html: str, finding_index: int) -> None:
+    """
+    Perform basic HTML safety validation.
+
+    This is a lightweight check - more thorough validation
+    will happen during actual analysis.
+    """
+    # Check for obviously dangerous patterns (basic check)
+    dangerous_patterns = [
+        "javascript:",
+        "vbscript:",
+        "onerror=",
+        "onclick=",
+    ]
+
+    html_lower = html.lower()
+    for pattern in dangerous_patterns:
+        if pattern in html_lower:
+            logger.warning(
+                f"Potentially dangerous HTML pattern found in finding {finding_index}: {pattern}"
+            )
+            # Don't raise error - just log warning
+
+
+def validate_request(request: RemediationRequest) -> None:
+    """
+    Validate the entire remediation request.
+
+    Raises ValidationError if validation fails.
+    """
+    # Check findings array is not empty
+    if not request.findings:
+        raise ValidationError(
+            "At least one finding is required"
+        )
+
+    # Limit number of findings per request (prevent abuse)
+    if len(request.findings) > 100:
+        raise ValidationError(
+            "Maximum 100 findings per request"
+        )
+
+    # Validate each finding
+    for idx, finding in enumerate(request.findings):
+        validate_finding(finding, idx)
+        validate_html_safety(finding.html, idx)
+
+    # Validate repo_path if provided
+    if request.repo_path:
+        if len(request.repo_path) > 500:
+            raise ValidationError(
+                "Repository path must be <= 500 characters"
+            )
+        if ".." in request.repo_path:
+            raise ValidationError(
+                "Repository path cannot contain '..' (path traversal)"
+            )
+
+    # Validate target_branch if provided
+    if request.target_branch:
+        if not request.target_branch.replace("-", "").replace("_", "").isalnum():
+            raise ValidationError(
+                "Branch name can only contain alphanumeric characters, hyphens, and underscores"
+            )
+        if len(request.target_branch) > 100:
+            raise ValidationError(
+                "Branch name must be <= 100 characters"
+            )
+
+
 @app.post("/remediate", response_model=RemediationResponse)
 async def remediate(request: RemediationRequest) -> RemediationResponse:
     """
     Generate code fixes for accessibility findings.
 
     This endpoint receives findings from the AI Investigator,
-    generates appropriate code changes, and returns proposed fixes
-    for developer approval.
+    validates the input, generates appropriate code changes,
+    and returns proposed fixes for developer approval.
 
     Args:
         request: RemediationRequest containing findings to fix
 
     Returns:
         RemediationResponse with proposed code changes
+
+    Raises:
+        400 Bad Request: If input validation fails
     """
+    # Validate the request
+    validate_request(request)
+
+    logger.info(f"Processing remediation request with {len(request.findings)} findings")
+
     request_id = str(uuid.uuid4())
 
     changes = []
@@ -54,6 +249,8 @@ async def remediate(request: RemediationRequest) -> RemediationResponse:
     else:
         summary += "No automatic fixes generated"
 
+    logger.info(f"Generated {len(changes)} changes for request {request_id}")
+
     return RemediationResponse(
         request_id=request_id,
         changes=changes,
@@ -70,8 +267,6 @@ def generate_fix_for_finding(finding: AccessibilityFinding):
     This is a simple implementation for Milestone 1.
     In later milestones, this will be expanded to handle more issue types.
     """
-    from remediation.models import CodeChange, ChangeType
-
     # Simple fix generation logic based on issue type
     if finding.issue_type.value == "button-name-missing":
         return _generate_button_name_fix(finding)
@@ -83,33 +278,58 @@ def generate_fix_for_finding(finding: AccessibilityFinding):
 
 
 def _generate_button_name_fix(finding: AccessibilityFinding) -> CodeChange:
-    """Generate a fix for missing button accessible name."""
+    """Generate a fix for missing button accessible name.
+
+    Uses the button_fixer module to intelligently generate aria-label
+    based on button context (type, id, class, parent form, etc.).
+    """
     html = finding.html
 
-    # Simple heuristic: if button has text but no aria-label/name,
-    # we might need to add context or verify the text is sufficient
+    # Use the button fixer module to generate an intelligent fix
+    fix = _generate_button_fix_impl(html)
+
+    # Generate unified diff for the change
+    diff = _button_unified_diff(
+        fix.original_html,
+        fix.fixed_html,
+        file_path=finding.file_path or "index.html"
+    )
 
     return CodeChange(
         finding_id=finding.finding_id,
         file_path=finding.file_path or "unknown",
-        original_code=html,
-        modified_code=html,  # To be updated in later milestones
-        diff=f"@@ -1 +1 @@\n-{html}\n+{html}",  # Placeholder
+        original_code=fix.original_html,
+        modified_code=fix.fixed_html,
+        diff=diff.rstrip('\n'),  # Remove trailing newline if present
         change_type=ChangeType.ADD_ARIA_LABEL,
-        explanation="Button needs an accessible name for screen readers",
+        explanation=fix.explanation,
     )
 
 
 def _generate_input_label_fix(finding: AccessibilityFinding) -> CodeChange:
-    """Generate a fix for missing input label."""
+    """Generate a fix for missing input label.
+
+    Uses the input_fixer module to intelligently generate aria-label
+    based on input context (type, id, placeholder, etc.).
+    """
     html = finding.html
+
+    # Use the input fixer module to generate an intelligent fix
+    fix = _generate_input_fix_impl(html)
+
+    # Generate unified diff for the change
+    diff = _input_unified_diff(
+        fix.original_html,
+        fix.fixed_html,
+        file_path=finding.file_path or "index.html"
+    )
 
     return CodeChange(
         finding_id=finding.finding_id,
         file_path=finding.file_path or "unknown",
-        original_code=html,
-        modified_code=html,  # To be updated in later milestones
-        diff=f"@@ -1 +1 @@\n-{html}\n+{html}",  # Placeholder
-        change_type=ChangeType.WRAP_WITH_LABEL,
-        explanation="Input needs a label for screen readers",
+        original_code=fix.original_html,
+        modified_code=fix.fixed_html,
+        diff=diff.rstrip('\n'),  # Remove trailing newline if present
+        change_type=ChangeType.ADD_ARIA_LABEL,
+        explanation=fix.explanation,
     )
