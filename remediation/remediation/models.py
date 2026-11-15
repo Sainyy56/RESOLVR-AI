@@ -11,6 +11,7 @@ These Pydantic models define the data contract between:
 from enum import Enum
 from typing import Optional, Literal
 from pydantic import BaseModel, Field
+from datetime import datetime
 
 
 class IssueType(str, Enum):
@@ -176,8 +177,8 @@ class RemediationRequest(BaseModel):
                         "finding_id": "f123-abc-456",
                         "issue_type": "button-name-missing",
                         "element": "#submit-btn",
-                        "html": "<button>Click me</button>",
-                        "root_cause": "Button has no accessible name"
+                        "html": "<button>Submit</button>",
+                        "root_cause": "No accessible name"
                     }
                 ]
             }
@@ -220,9 +221,9 @@ class RemediationResponse(BaseModel):
                     {
                         "finding_id": "f123-abc-456",
                         "file_path": "/project/src/index.html",
-                        "original_code": "<button>Click me</button>",
-                        "modified_code": '<button aria-label="Submit form">Click me</button>',
-                        "diff": "@@ -1 +1 @@\n-<button>Click me</button>\n+<button aria-label=\"Submit form\">Click me</button>",
+                        "original_code": "<button>Submit</button>",
+                        "modified_code": '<button aria-label="Submit form">Submit</button>',
+                        "diff": "diff here",
                         "change_type": "add-aria-label"
                     }
                 ],
@@ -231,6 +232,55 @@ class RemediationResponse(BaseModel):
                 "summary": "1 change proposed: Add aria-label to button"
             }
         }
+
+
+class ApprovalDecision(str, Enum):
+    """Approval status for a remediation request."""
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    PENDING = "pending"
+
+
+class ApprovalRecord(BaseModel):
+    """Record of an approval decision."""
+    request_id: str
+    decision: ApprovalDecision
+    reviewer: Optional[str] = None
+    feedback: Optional[str] = None
+    approved_changes: list[str] = Field(default_factory=list)  # List of finding_ids
+    rejected_changes: list[str] = Field(default_factory=list)  # List of finding_ids
+    timestamp: str  # ISO format datetime
+    applied: bool = False  # Whether changes were actually applied
+
+
+class RemediationStatus(BaseModel):
+    """Status of a remediation request including approval state."""
+    request_id: str
+    status: Literal["pending", "approved", "rejected", "partial", "applied", "failed"]
+    approval_status: ApprovalDecision
+    changes: list[CodeChange] = Field(default_factory=list)
+    approval_record: Optional[ApprovalRecord] = None
+    summary: str = ""
+
+
+class ApprovalRequest(BaseModel):
+    """Request body for approval endpoint."""
+    reviewer: Optional[str] = Field(default=None, description="Name of the approver")
+    feedback: Optional[str] = Field(default=None, description="Feedback on the approval")
+    approved_changes: Optional[list[str]] = Field(
+        default=None,
+        description="List of specific finding_ids to approve (None = all)"
+    )
+
+
+class RejectionRequest(BaseModel):
+    """Request body for rejection endpoint."""
+    reviewer: Optional[str] = Field(default=None, description="Name of the rejecter")
+    feedback: Optional[str] = Field(default=None, description="Feedback explaining the rejection")
+    rejected_changes: Optional[list[str]] = Field(
+        default=None,
+        description="List of specific finding_ids to reject (None = all)"
+    )
 
 
 # Backward compatibility alias
