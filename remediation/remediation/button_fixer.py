@@ -9,7 +9,11 @@ from html.parser import HTMLParser
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 import re
-import difflib
+
+from remediation.utils.diff_utils import (
+    generate_unified_diff as _generate_enhanced_unified_diff,
+    generate_readable_diff as _generate_readable_diff,
+)
 
 
 @dataclass
@@ -349,26 +353,46 @@ def generate_unified_diff(original_html: str, modified_html: str, file_path: str
     """
     Generate a unified diff between original and modified HTML.
 
+    Uses enhanced diff generation with proper context lines for
+    better readability in code reviews.
+
     Args:
         original_html: The original HTML
         modified_html: The modified HTML
         file_path: Virtual file path for the diff header
 
     Returns:
-        Unified diff string
+        Unified diff string with context
     """
-    original_lines = original_html.splitlines(keepends=True)
-    modified_lines = modified_html.splitlines(keepends=True)
-
-    diff = difflib.unified_diff(
-        original_lines,
-        modified_lines,
-        fromfile=f"a/{file_path}",
-        tofile=f"b/{file_path}",
-        lineterm="",
+    return _generate_enhanced_unified_diff(
+        original_html,
+        modified_html,
+        file_path=file_path,
+        context_lines=3
     )
 
-    return "".join(diff)
+
+def generate_readable_diff(original_html: str, modified_html: str, file_path: str = "index.html") -> str:
+    """
+    Generate a human-readable diff format.
+
+    This provides an alternative representation optimized for
+    developer review, showing before/after clearly.
+
+    Args:
+        original_html: The original HTML
+        modified_html: The modified HTML
+        file_path: File path for context
+
+    Returns:
+        Human-readable diff string
+    """
+    return _generate_readable_diff(
+        original_html,
+        modified_html,
+        file_path=file_path,
+        context_lines=3
+    )
 
 
 def analyze_html_for_buttons(html: str) -> List[ButtonInfo]:
