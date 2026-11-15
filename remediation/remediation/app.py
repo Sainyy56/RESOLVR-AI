@@ -451,6 +451,8 @@ async def reject_request(
         reviewer=rejection.reviewer,
         feedback=rejection.feedback,
         rejected_changes=rejection.rejected_changes,
+        feedback_category=rejection.feedback_category,
+        requires_rework=rejection.requires_rework,
     )
 
     logger.info(f"Rejected remediation request {request_id} by {rejection.reviewer or 'anonymous'}")

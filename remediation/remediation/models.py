@@ -252,6 +252,26 @@ class ApprovalRecord(BaseModel):
     timestamp: str  # ISO format datetime
     applied: bool = False  # Whether changes were actually applied
 
+    # Feedback metadata for analysis
+    feedback_category: Optional[str] = None  # e.g., "style", "incorrect", "needs-review"
+    requires_rework: bool = False  # Whether the remediation needs to be redone
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "request_id": "req-123",
+                "decision": "rejected",
+                "reviewer": "developer@example.com",
+                "feedback": "aria-label should be more descriptive",
+                "approved_changes": [],
+                "rejected_changes": ["f1", "f2"],
+                "timestamp": "2024-01-15T10:30:00Z",
+                "applied": False,
+                "feedback_category": "style",
+                "requires_rework": True
+            }
+        }
+
 
 class RemediationStatus(BaseModel):
     """Status of a remediation request including approval state."""
@@ -280,6 +300,14 @@ class RejectionRequest(BaseModel):
     rejected_changes: Optional[list[str]] = Field(
         default=None,
         description="List of specific finding_ids to reject (None = all)"
+    )
+    feedback_category: Optional[str] = Field(
+        default=None,
+        description="Category of feedback: style, incorrect, needs-review, security, other"
+    )
+    requires_rework: bool = Field(
+        default=False,
+        description="Whether the remediation needs to be redone"
     )
 
 

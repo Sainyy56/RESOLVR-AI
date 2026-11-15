@@ -43,6 +43,8 @@ class ApprovalStore:
         feedback: Optional[str] = None,
         approved_changes: Optional[List[str]] = None,
         rejected_changes: Optional[List[str]] = None,
+        feedback_category: Optional[str] = None,
+        requires_rework: bool = False,
     ) -> ApprovalRecord:
         """
         Record an approval or rejection decision.
@@ -54,6 +56,8 @@ class ApprovalStore:
             feedback: Feedback on the decision (optional)
             approved_changes: List of finding_ids to approve (None = all)
             rejected_changes: List of finding_ids to reject (None = all for rejections)
+            feedback_category: Category of feedback
+            requires_rework: Whether rework is needed
 
         Returns:
             The created ApprovalRecord
@@ -81,6 +85,8 @@ class ApprovalStore:
             rejected_changes=rejected_changes,
             timestamp=datetime.utcnow().isoformat(),
             applied=False,
+            feedback_category=feedback_category,
+            requires_rework=requires_rework,
         )
 
         self._approvals[request_id] = record
