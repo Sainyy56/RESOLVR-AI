@@ -105,8 +105,15 @@ class ButtonHTMLParser(HTMLParser):
 
         return f"<{tag} {' '.join(attr_strs)}>"
 
-    def _escape_attr(self, value: str) -> str:
-        """Escape special characters in attribute values."""
+    def _escape_attr(self, value) -> str:
+        """Escape special characters in attribute values.
+
+        Boolean attributes (e.g. ``disabled``, ``required``) have a ``None``
+        value in the parser's attrs list, so guard against that before
+        stringifying.
+        """
+        if value is None:
+            return ""
         return value.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
 
 

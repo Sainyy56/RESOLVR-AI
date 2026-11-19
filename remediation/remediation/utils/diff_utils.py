@@ -94,22 +94,22 @@ def generate_readable_diff(
 
         if tag == 'delete':
             # Lines removed
-            for i in range(max(0, i1 - context_lines), i2):
-                output.append(f"  {original_lines[i]}")
+            for i in range(i1, i2):
+                output.append(f"  -{original_lines[i]}")
 
         elif tag == 'insert':
             # Lines added
-            for i in range(max(0, j1 - context_lines), j2):
-                output.append(f"  {modified_lines[i]}")
+            for j in range(j1, j2):
+                output.append(f"  +{modified_lines[j]}")
 
         elif tag == 'replace':
-            # Lines replaced
-            for i in range(max(0, i1 - context_lines), i2):
-                if i < len(original_lines):
-                    output.append(f"  {original_lines[i]}")
-            for j in range(max(0, j1 - context_lines), j2):
-                if j < len(modified_lines):
-                    output.append(f"  {modified_lines[j]}")
+            # Lines replaced: show removed then added with clearer markers
+            for idx in range(i2 - i1):
+                if i1 + idx < len(original_lines):
+                    output.append(f"  -{original_lines[i1 + idx]}")
+            for idx in range(j2 - j1):
+                if j1 + idx < len(modified_lines):
+                    output.append(f"  +{modified_lines[j1 + idx]}")
 
     return "\n".join(output)
 
@@ -222,18 +222,23 @@ def generate_side_by_side_diff(
         if tag == 'equal':
             continue
 
-        # Get context before
-        start_i = max(0, i1 - context_lines)
-        start_j = max(0, j1 - context_lines)
-
-        # Show the changes
-        orig_block = original_lines[start_i:i1] if tag in ('delete', 'replace') else []
-        mod_block = modified_lines[start_j:j1] if tag in ('insert', 'replace') else []
+        # Show the changed/deleted/added lines
+        if tag == 'replace':
+            orig_block = original_lines[i1:i2]
+            mod_block = modified_lines[j1:j2]
+        elif tag == 'delete':
+            orig_block = original_lines[i1:i2]
+            mod_block = []
+        elif tag == 'insert':
+            orig_block = []
+            mod_block = modified_lines[j1:j2]
+        else:
+            continue
 
         # Determine max width
-        for i in range(max(len(orig_block), len(mod_block))):
-            orig_line = orig_block[i] if i < len(orig_block) else ""
-            mod_line = mod_block[i] if i < len(mod_block) else ""
+        for idx in range(max(len(orig_block), len(mod_block))):
+            orig_line = orig_block[idx] if idx < len(orig_block) else ""
+            mod_line = mod_block[idx] if idx < len(mod_block) else ""
 
             if tag == 'insert':
                 orig_line = ""

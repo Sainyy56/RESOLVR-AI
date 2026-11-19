@@ -314,3 +314,61 @@ class RejectionRequest(BaseModel):
 # Backward compatibility alias
 AccessibilityFindingV1 = AccessibilityFinding
 CodeChangeV1 = CodeChange
+
+
+class VerificationStatus(str, Enum):
+    """Status of a verification run."""
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    ERROR = "error"
+
+
+class VerificationResult(BaseModel):
+    """Result of a single verification command."""
+    command: str
+    status: VerificationStatus
+    stdout: str = ""
+    stderr: str = ""
+    exit_code: int = 0
+    duration_seconds: float = 0.0
+    error_message: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "command": "pytest tests/",
+                "status": "passed",
+                "stdout": "50 tests passed",
+                "stderr": "",
+                "exit_code": 0,
+                "duration_seconds": 1.2,
+            }
+        }
+
+
+class VerificationReport(BaseModel):
+    """Complete verification report for a remediation request."""
+    request_id: str
+    build_status: VerificationStatus = VerificationStatus.SKIPPED
+    test_status: VerificationStatus = VerificationStatus.SKIPPED
+    build_result: Optional[VerificationResult] = None
+    test_result: Optional[VerificationResult] = None
+    project_type: str = "unknown"
+    total_duration_seconds: float = 0.0
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    overall_status: VerificationStatus = VerificationStatus.PASSED
+    timestamp: str = ""
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "request_id": "req-123",
+                "build_status": "passed",
+                "test_status": "passed",
+                "project_type": "python",
+                "total_duration_seconds": 2.5,
+                "overall_status": "passed",
+            }
+        }
