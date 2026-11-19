@@ -20,7 +20,21 @@ from remediation.models import (
     IssueType,
     ChangeType,
     CodeChange,
+    ApprovalDecision,
+    ApprovalRecord,
+    RemediationStatus,
+    ApprovalRequest,
+    RejectionRequest,
 )
+from remediation.button_fixer import (
+    generate_button_fix as _generate_button_fix_impl,
+    generate_unified_diff as _button_unified_diff,
+)
+from remediation.input_fixer import (
+    generate_input_fix as _generate_input_fix_impl,
+    generate_unified_diff as _input_unified_diff,
+)
+from remediation.approval_store import get_approval_store
 from remediation.button_fixer import (
     generate_button_fix as _generate_button_fix_impl,
     generate_unified_diff as _button_unified_diff,
@@ -251,13 +265,19 @@ async def remediate(request: RemediationRequest) -> RemediationResponse:
 
     logger.info(f"Generated {len(changes)} changes for request {request_id}")
 
-    return RemediationResponse(
+    response = RemediationResponse(
         request_id=request_id,
         changes=changes,
         status="pending",
         requires_approval=len(changes) > 0,
         summary=summary,
     )
+
+    # Store the response for later approval
+    store = get_approval_store()
+    store.store_response(request_id, response)
+
+    return response
 
 
 def generate_fix_for_finding(finding: AccessibilityFinding):
@@ -333,3 +353,165 @@ def _generate_input_label_fix(finding: AccessibilityFinding) -> CodeChange:
         change_type=ChangeType.ADD_ARIA_LABEL,
         explanation=fix.explanation,
     )
+
+
+# ============================================================================
+# Approval Endpoints - Milestone 6 Phase 1
+# ============================================================================
+
+@app.post("/approve/{request_id}", response_model=ApprovalRecord)
+async def approve_request(
+    request_id: str,
+    approval: ApprovalRequest
+):
+    """
+    Approve a remediation request.
+
+    Approves the proposed changes for application. Can optionally
+    approve only specific changes by providing their finding_ids.
+
+    Args:
+        request_id: ID of the remediation request to approve
+        approval: ApprovalRequest with reviewer, feedback, and optional approved_changes
+
+    Returns:
+        ApprovalRecord with the decision details
+
+    Raises:
+        404 Not Found: If request_id doesn't exist
+        400 Bad Request: If no changes to approve
+    """
+    store = get_approval_store()
+
+    # Check if response exists
+    response = store.get_response(request_id)
+    if not response:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Remediation request {request_id} not found"
+        )
+
+    # Check if already approved
+    existing = store.get_approval(request_id)
+    if existing and existing.decision == ApprovalDecision.APPROVED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Request {request_id} has already been approved"
+        )
+
+    # Record the approval
+    record = store.record_approval(
+        request_id=request_id,
+        decision=ApprovalDecision.APPROVED,
+        reviewer=approval.reviewer,
+        feedback=approval.feedback,
+        approved_changes=approval.approved_changes,
+    )
+
+    logger.info(f"Approved remediation request {request_id} by {approval.reviewer or 'anonymous'}")
+
+    return record
+
+
+@app.post("/reject/{request_id}", response_model=ApprovalRecord)
+async def reject_request(
+    request_id: str,
+    rejection: RejectionRequest
+):
+    """
+    Reject a remediation request.
+
+    Rejects the proposed changes. Can optionally reject only specific
+    changes by providing their finding_ids (useful for partial rejection).
+
+    Args:
+        request_id: ID of the remediation request to reject
+        rejection: RejectionRequest with reviewer, feedback, and optional rejected_changes
+
+    Returns:
+        ApprovalRecord with the decision details
+
+    Raises:
+        404 Not Found: If request_id doesn't exist
+    """
+    store = get_approval_store()
+
+    # Check if response exists
+    response = store.get_response(request_id)
+    if not response:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Remediation request {request_id} not found"
+        )
+
+    # Record the rejection
+    record = store.record_approval(
+        request_id=request_id,
+        decision=ApprovalDecision.REJECTED,
+        reviewer=rejection.reviewer,
+        feedback=rejection.feedback,
+        rejected_changes=rejection.rejected_changes,
+        feedback_category=rejection.feedback_category,
+        requires_rework=rejection.requires_rework,
+    )
+
+    logger.info(f"Rejected remediation request {request_id} by {rejection.reviewer or 'anonymous'}")
+
+    return record
+
+
+@app.get("/status/{request_id}", response_model=RemediationStatus)
+async def get_request_status(request_id: str):
+    """
+    Get the current status of a remediation request.
+
+    Shows whether the request is pending, approved, rejected, or applied.
+
+    Args:
+        request_id: ID of the remediation request
+
+    Returns:
+        RemediationStatus with current state
+
+    Raises:
+        404 Not Found: If request_id doesn't exist
+    """
+    store = get_approval_store()
+
+    response = store.get_response(request_id)
+    if not response:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Remediation request {request_id} not found"
+        )
+
+    approval = store.get_approval(request_id)
+
+    # Determine status
+    if approval:
+        status = approval.decision.value
+        if approval.applied and approval.decision != ApprovalDecision.REJECTED:
+            status = "applied"
+    else:
+        status = "pending" if response.requires_approval else response.status
+
+    return RemediationStatus(
+        request_id=request_id,
+        status=status,
+        approval_status=approval.decision if approval else ApprovalDecision.PENDING,
+        changes=response.changes,
+        approval_record=approval,
+        summary=response.summary,
+    )
+
+
+@app.get("/pending", response_model=list[str])
+async def list_pending_requests():
+    """
+    List all remediation requests pending approval.
+
+    Returns:
+        List of request IDs awaiting approval
+    """
+    store = get_approval_store()
+    return store.get_pending_requests()

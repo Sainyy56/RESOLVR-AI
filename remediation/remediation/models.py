@@ -11,6 +11,7 @@ These Pydantic models define the data contract between:
 from enum import Enum
 from typing import Optional, Literal
 from pydantic import BaseModel, Field
+from datetime import datetime
 
 
 class IssueType(str, Enum):
@@ -176,8 +177,8 @@ class RemediationRequest(BaseModel):
                         "finding_id": "f123-abc-456",
                         "issue_type": "button-name-missing",
                         "element": "#submit-btn",
-                        "html": "<button>Click me</button>",
-                        "root_cause": "Button has no accessible name"
+                        "html": "<button>Submit</button>",
+                        "root_cause": "No accessible name"
                     }
                 ]
             }
@@ -220,9 +221,9 @@ class RemediationResponse(BaseModel):
                     {
                         "finding_id": "f123-abc-456",
                         "file_path": "/project/src/index.html",
-                        "original_code": "<button>Click me</button>",
-                        "modified_code": '<button aria-label="Submit form">Click me</button>',
-                        "diff": "@@ -1 +1 @@\n-<button>Click me</button>\n+<button aria-label=\"Submit form\">Click me</button>",
+                        "original_code": "<button>Submit</button>",
+                        "modified_code": '<button aria-label="Submit form">Submit</button>',
+                        "diff": "diff here",
                         "change_type": "add-aria-label"
                     }
                 ],
@@ -233,6 +234,141 @@ class RemediationResponse(BaseModel):
         }
 
 
+class ApprovalDecision(str, Enum):
+    """Approval status for a remediation request."""
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    PENDING = "pending"
+
+
+class ApprovalRecord(BaseModel):
+    """Record of an approval decision."""
+    request_id: str
+    decision: ApprovalDecision
+    reviewer: Optional[str] = None
+    feedback: Optional[str] = None
+    approved_changes: list[str] = Field(default_factory=list)  # List of finding_ids
+    rejected_changes: list[str] = Field(default_factory=list)  # List of finding_ids
+    timestamp: str  # ISO format datetime
+    applied: bool = False  # Whether changes were actually applied
+
+    # Feedback metadata for analysis
+    feedback_category: Optional[str] = None  # e.g., "style", "incorrect", "needs-review"
+    requires_rework: bool = False  # Whether the remediation needs to be redone
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "request_id": "req-123",
+                "decision": "rejected",
+                "reviewer": "developer@example.com",
+                "feedback": "aria-label should be more descriptive",
+                "approved_changes": [],
+                "rejected_changes": ["f1", "f2"],
+                "timestamp": "2024-01-15T10:30:00Z",
+                "applied": False,
+                "feedback_category": "style",
+                "requires_rework": True
+            }
+        }
+
+
+class RemediationStatus(BaseModel):
+    """Status of a remediation request including approval state."""
+    request_id: str
+    status: Literal["pending", "approved", "rejected", "partial", "applied", "failed"]
+    approval_status: ApprovalDecision
+    changes: list[CodeChange] = Field(default_factory=list)
+    approval_record: Optional[ApprovalRecord] = None
+    summary: str = ""
+
+
+class ApprovalRequest(BaseModel):
+    """Request body for approval endpoint."""
+    reviewer: Optional[str] = Field(default=None, description="Name of the approver")
+    feedback: Optional[str] = Field(default=None, description="Feedback on the approval")
+    approved_changes: Optional[list[str]] = Field(
+        default=None,
+        description="List of specific finding_ids to approve (None = all)"
+    )
+
+
+class RejectionRequest(BaseModel):
+    """Request body for rejection endpoint."""
+    reviewer: Optional[str] = Field(default=None, description="Name of the rejecter")
+    feedback: Optional[str] = Field(default=None, description="Feedback explaining the rejection")
+    rejected_changes: Optional[list[str]] = Field(
+        default=None,
+        description="List of specific finding_ids to reject (None = all)"
+    )
+    feedback_category: Optional[str] = Field(
+        default=None,
+        description="Category of feedback: style, incorrect, needs-review, security, other"
+    )
+    requires_rework: bool = Field(
+        default=False,
+        description="Whether the remediation needs to be redone"
+    )
+
+
 # Backward compatibility alias
 AccessibilityFindingV1 = AccessibilityFinding
 CodeChangeV1 = CodeChange
+
+
+class VerificationStatus(str, Enum):
+    """Status of a verification run."""
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    ERROR = "error"
+
+
+class VerificationResult(BaseModel):
+    """Result of a single verification command."""
+    command: str
+    status: VerificationStatus
+    stdout: str = ""
+    stderr: str = ""
+    exit_code: int = 0
+    duration_seconds: float = 0.0
+    error_message: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "command": "pytest tests/",
+                "status": "passed",
+                "stdout": "50 tests passed",
+                "stderr": "",
+                "exit_code": 0,
+                "duration_seconds": 1.2,
+            }
+        }
+
+
+class VerificationReport(BaseModel):
+    """Complete verification report for a remediation request."""
+    request_id: str
+    build_status: VerificationStatus = VerificationStatus.SKIPPED
+    test_status: VerificationStatus = VerificationStatus.SKIPPED
+    build_result: Optional[VerificationResult] = None
+    test_result: Optional[VerificationResult] = None
+    project_type: str = "unknown"
+    total_duration_seconds: float = 0.0
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    overall_status: VerificationStatus = VerificationStatus.PASSED
+    timestamp: str = ""
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "request_id": "req-123",
+                "build_status": "passed",
+                "test_status": "passed",
+                "project_type": "python",
+                "total_duration_seconds": 2.5,
+                "overall_status": "passed",
+            }
+        }
